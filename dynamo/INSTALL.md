@@ -1,0 +1,57 @@
+# Installation
+
+For **vLLM 0.24 with ThunderAgent and V1 async**, follow the
+[dedicated guide](THUNDERAGENT_VLLM024.md), which preserves the 0.24 engine stack
+and includes the required compatibility patch.
+
+## Source install
+
+Use an activated **Python 3.12** environment on Linux with verl and either
+**vLLM 0.28.0** or **SGLang 0.5.19** already installed. Keep separate environments
+for the two engines. Install the Python build tools into that environment:
+
+```bash
+python3 -m pip install uv 'maturin[patchelf]'
+```
+
+Rust **1.96.1** is selected by the pinned checkout's `rust-toolchain.toml`.
+For system libraries, the compiler and libclang, follow the
+[official source-build guide](https://docs.dynamo.nvidia.com/dynamo/advanced-customizations/building-from-source).
+Build in a Linux environment compatible with the training container.
+
+```bash
+export DYNAMO_SRC=/path/to/dynamo
+cd "$DYNAMO_SRC"
+git checkout 8c5a73723109058f96c15fff3fc912231d65ad6e
+python3 -m uv build --wheel
+cd "$DYNAMO_SRC/lib/bindings/python"
+python3 -m maturin build --release --locked --features kv-indexer --out "$DYNAMO_SRC/dist"
+python3 -m uv pip install --python "$(command -v python3)" \
+    --reinstall-package ai-dynamo --reinstall-package ai-dynamo-runtime \
+    "$DYNAMO_SRC"/dist/ai_dynamo*.whl 'protobuf>=6.33.5,<7'
+export PYTHONPATH="$DYNAMO_SRC/components/src${PYTHONPATH:+:$PYTHONPATH}"
+python3 -c 'import dynamo._core; print(dynamo._core.__file__)'
+python3 -m dynamo.frontend --help
+```
+
+`uv build` produces the `ai_dynamo` Python wheel; `maturin build` produces the
+`ai_dynamo_runtime` wheel containing `dynamo._core`. Both go into `dist/` here;
+keep only this build's two wheels there. The install command replaces those two
+packages even if a previous build has the same version number, while resolving
+Dynamo dependencies. `--python` selects the active interpreter explicitly.
+
+`PYTHONPATH` loads frontend/backend Python code from the same checkout. Repeat
+that export in the training job, with the checkout mounted at `DYNAMO_SRC`.
+Keep `etcd` and `nats-server` on `PATH`, then use the [README launch commands](README.md#launch).
+
+## Build features
+
+`--features kv-indexer` keeps Cargo's default features and adds the standalone
+indexer. This recipe's text-only frontend KV routing does not use the other
+optional services in the full build. Enable routing at runtime with `router_mode=kv` and
+`enable_kv_events=true`; the build flag alone does not configure the router.
+
+The reduced feature selection is based on the pinned source and recipe's launch
+path. Published benchmark results used the
+[full build recorded with the benchmark](https://github.com/verl-project/verl-recipe/blob/5451026758c3f1dc3ebc2a46a0e52b14406f0f72/dynamo/INSTALL.md#dfw-benchmark-build);
+the reduced build has not been rerun through the H100 comparison.
